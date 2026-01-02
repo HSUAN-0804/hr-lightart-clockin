@@ -34,7 +34,8 @@
     .kv div{font-size:13px;color:var(--muted)}
     .kv b{color:var(--text);font-weight:800;word-break:break-all}
     .mini{margin-top:12px;color:rgba(255,255,255,.55);font-size:12px}
-    .copybtn{
+
+    .softbtn{
       margin-top:10px;
       width:100%;
       border-radius:14px;
@@ -44,6 +45,19 @@
       background:rgba(255,215,0,.12);
       border:1px solid rgba(255,215,0,.25);
       color:rgba(255,255,255,.92);
+      cursor:pointer;
+      display:none;
+    }
+    .closebtn{
+      margin-top:10px;
+      width:100%;
+      border-radius:14px;
+      padding:12px;
+      font-size:14px;
+      font-weight:900;
+      background:rgba(255,255,255,.10);
+      border:1px solid rgba(255,255,255,.18);
+      color:rgba(255,255,255,.96);
       cursor:pointer;
       display:none;
     }
@@ -67,9 +81,11 @@
         <div>距離店面</div><div><b id="distText">--</b></div>
         <div>圍欄規則</div><div><b id="fenceText">{{ GEOFENCE_METERS }}m 內可打卡</b></div>
         <div>我的LINE ID</div><div><b id="uidText">--</b></div>
+        <div>LIFF環境</div><div><b id="clientText">--</b></div>
       </div>
 
-      <button class="copybtn" id="btnCopyId">一鍵複製我的LINE ID</button>
+      <button class="softbtn" id="btnCopyId">一鍵複製我的LINE ID</button>
+      <button class="closebtn" id="btnClose">關閉視窗（返回LINE）</button>
 
       <div class="grid">
         <button id="btnIn">上班打卡</button>
@@ -93,7 +109,9 @@
   const distText = el('distText');
   const fenceText = el('fenceText');
   const uidText = el('uidText');
+  const clientText = el('clientText');
   const btnCopyId = el('btnCopyId');
+  const btnClose = el('btnClose');
   const clockEl = el('clock');
 
   let profile = null;
@@ -103,6 +121,14 @@
     statusBox.className = 'status ' + (type || '');
     statusBox.textContent = text;
   }
+
+  function showCloseBtn(){
+    if(btnClose) btnClose.style.display = 'block';
+  }
+
+  btnClose && btnClose.addEventListener('click', ()=>{
+    try { liff.closeWindow(); } catch(e) {}
+  });
 
   function tickClock(){
     const d = new Date();
@@ -123,13 +149,21 @@
     try{
       await liff.init({ liffId: LIFF_ID });
 
+      // 顯示是否在 LINE 內
+      try {
+        clientText.textContent = (liff.isInClient && liff.isInClient()) ? 'LINE內（可關閉）' : '非LINE內（不可自動關閉）';
+      } catch(e) {
+        clientText.textContent = '未知';
+      }
+
       if(!liff.isLoggedIn()){
         pillLogin.textContent = '未登入';
 
-        // ✅ 若不是在 LINE 內（電腦測試），就不要強制跳登入，避免一直被導走
-        if(!liff.isInClient()){
+        // ✅ 若不是在 LINE 內（電腦/外部瀏覽器），不要強制跳登入
+        if(!liff.isInClient || !liff.isInClient()){
           setStatus('warn', '請用手機 LINE 內開啟此頁面才能打卡（此頁為 LIFF）。');
           helloEl.textContent = '請用 LINE 打開此頁。';
+          showCloseBtn(); // 至少讓你可以按關閉（若在LINE內）
           return;
         }
 
@@ -142,7 +176,6 @@
       pillLogin.textContent = '已登入';
       helloEl.textContent = `嗨 ${profile.displayName}，請先取得定位後再打卡。`;
 
-      // ✅ 顯示 userId
       uidText.textContent = profile.userId || '--';
       if(profile.userId){
         btnCopyId.style.display = 'block';
@@ -152,6 +185,7 @@
       await getGps();
     }catch(err){
       setStatus('bad', '初始化失敗：' + (err && err.message ? err.message : err));
+      showCloseBtn();
     }
   }
 
@@ -160,6 +194,7 @@
       if(!navigator.geolocation){
         pillGps.textContent = '不支援定位';
         setStatus('bad','此裝置不支援定位，無法打卡。');
+        showCloseBtn();
         return reject(new Error('no geolocation'));
       }
       navigator.geolocation.getCurrentPosition(
@@ -174,6 +209,7 @@
           pillGps.textContent = '定位失敗';
           distText.textContent = '--';
           setStatus('bad', '定位失敗：請允許定位權限後再試一次。');
+          showCloseBtn();
           reject(new Error('gps fail'));
         },
         { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
@@ -208,17 +244,24 @@
       if(data.ok){
         setStatus('ok', `✅ 打卡成功｜距離 ${data.distance_m}m`);
 
-        // ✅ 成功後自動關閉 LIFF（只在 LINE 內才關）
-        if (window.liff && liff.isInClient && liff.isInClient()) {
-          setTimeout(() => {
-            try { liff.closeWindow(); } catch(e) {}
-          }, 800);
-        }
+        // ✅ 立刻關閉（同步呼叫，不用 setTimeout）
+        try {
+          if (window.liff && typeof liff.closeWindow === 'function') {
+            liff.closeWindow();
+            return;
+          }
+        } catch(e) {}
+
+        // 保底：如果不能自動關，就顯示手動關閉按鈕
+        showCloseBtn();
       }else{
         setStatus('bad', data.message || '打卡失敗');
+        // 若在LINE內但關不了，也提供手動
+        showCloseBtn();
       }
     }catch(err){
       setStatus('bad', '送出失敗：' + (err && err.message ? err.message : err));
+      showCloseBtn();
     }
   }
 
@@ -232,7 +275,6 @@
       await navigator.clipboard.writeText(uid);
       setStatus('ok', '✅ 已複製 LINE ID，請貼到 Sheets 的 employees → line_user_id');
     }catch(e){
-      // iOS 有時不支援 clipboard API，就用 fallback
       const uid = (profile && profile.userId) ? profile.userId : uidText.textContent;
       const ta = document.createElement('textarea');
       ta.value = uid;
