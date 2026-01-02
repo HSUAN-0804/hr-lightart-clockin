@@ -206,10 +206,18 @@
       const data = await resp.json();
 
       if(data.ok){
-        setStatus('ok', `✅ 打卡成功｜距離 ${data.distance_m}m`);
-      }else{
-        setStatus('bad', data.message || '打卡失敗');
-      }
+  setStatus('ok', `✅ 打卡成功｜距離 ${data.distance_m}m`);
+
+  // ✅ 成功後自動關閉（只在 LINE 內才關）
+  if (liff && liff.isInClient && liff.isInClient()) {
+    setTimeout(() => {
+      try { liff.closeWindow(); } catch(e) {}
+    }, 800); // 0.8 秒，讓使用者先看到成功提示
+  }
+} else {
+  setStatus('bad', data.message || '打卡失敗');
+}
+
     }catch(err){
       setStatus('bad', '送出失敗：' + (err && err.message ? err.message : err));
     }
