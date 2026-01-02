@@ -1,19 +1,20 @@
-import os, json
+import os
 from flask import Flask, request, jsonify, render_template
 import requests
 
 app = Flask(__name__)
 
 # ====== ENV (set in Render) ======
-GAS_WEBAPP_URL = os.environ.get("GAS_WEBAPP_URL", "").strip()  # e.g. https://script.google.com/macros/s/.../exec
-LIFF_ID = os.environ.get("LIFF_ID", "").strip()
-SHOP_NAME = os.environ.get("SHOP_NAME", "H.R燈藝").strip()
-GEOFENCE_METERS = int(os.environ.get("GEOFENCE_METERS", "50"))
+GAS_WEBAPP_URL = (os.environ.get("GAS_WEBAPP_URL") or "").strip()  # https://script.google.com/macros/s/.../exec
+LIFF_ID = (os.environ.get("LIFF_ID") or "").strip()
+SHOP_NAME = (os.environ.get("SHOP_NAME") or "H.R燈藝").strip()
+GEOFENCE_METERS = int(os.environ.get("GEOFENCE_METERS") or "50")
 
 if not GAS_WEBAPP_URL:
     print("WARN: GAS_WEBAPP_URL is not set.")
 if not LIFF_ID:
     print("WARN: LIFF_ID is not set.")
+
 
 def _render_index():
     return render_template(
@@ -23,23 +24,32 @@ def _render_index():
         GEOFENCE_METERS=GEOFENCE_METERS,
     )
 
+
 @app.get("/")
 def home():
     return _render_index()
 
-# ✅ 防呆：任何路徑（含 /favicon.ico、/index.html、LINE 帶的奇怪路徑）都回到打卡頁，避免 NOT FOUND
+
+# ✅ 防呆：任何路徑（含 /favicon.ico、LINE 帶的奇怪路徑）都回首頁，避免 NOT FOUND
 @app.get("/<path:any_path>")
 def catch_all(any_path):
     return _render_index()
 
+
 @app.post("/api/clock")
 def api_clock():
-    """Proxy endpoint to avoid CORS: Frontend -> Render -> GAS (server-to-server)."""
+    """
+    Proxy endpoint to avoid CORS:
+    Frontend -> Render (/api/clock) -> GAS WebApp (server-to-server)
+
+    ✅ 重要修正：用 requests 的 json=payload 送出，避免 GAS 收到空 body
+    """
     if not GAS_WEBAPP_URL:
         return jsonify({"ok": False, "code": "NO_GAS_URL", "message": "系統尚未設定 GAS_WEBAPP_URL"}), 500
 
     data = request.get_json(silent=True) or {}
-    action = str(data.get("action", "")).upper()
+
+    action = str(data.get("action", "")).upper().strip()
     user_id = str(data.get("userId", "")).strip()
     lat = data.get("lat")
     lng = data.get("lng")
@@ -61,19 +71,36 @@ def api_clock():
     }
 
     try:
+        # ✅ 用 json=payload 讓 requests 正確帶 JSON body（GAS 才不會收到空 body）
         r = requests.post(
             GAS_WEBAPP_URL,
-            data=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
+            json=payload,
             timeout=15
         )
+
+        # GAS 應回 JSON
         try:
             out = r.json()
         except Exception:
-            out = {"ok": False, "code": "BAD_GAS_RESPONSE", "message": "GAS 回應格式錯誤", "raw": r.text[:500]}
-        return jsonify(out), 200 if r.status_code < 400 else 500
+            out = {
+                "ok": False,
+                "code": "BAD_GAS_RESPONSE",
+                "message": "GAS 回應格式錯誤（非 JSON）",
+                "http_status": r.status_code,
+                "raw_head": (r.text or "")[:500],
+            }
+
+        # 保持前端容易處理：永遠回 200 + JSON
+        return jsonify(out), 200
+
     except requests.RequestException as e:
-        return jsonify({"ok": False, "code": "GAS_UNREACHABLE", "message": "無法連線到 GAS，請稍後再試", "detail": str(e)}), 502
+        return jsonify({
+            "ok": False,
+            "code": "GAS_UNREACHABLE",
+            "message": "無法連線到 GAS，請稍後再試",
+            "detail": str(e)
+        }), 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
