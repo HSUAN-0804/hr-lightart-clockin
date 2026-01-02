@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: hr-clockin
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: GAS_WEBAPP_URL
+        sync: false
+      - key: LIFF_ID
+        sync: false
+      - key: SHOP_NAME
+        value: H.R燈藝
+      - key: GEOFENCE_METERS
+        value: "50"
