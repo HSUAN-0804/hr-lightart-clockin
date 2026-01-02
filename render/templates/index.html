@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>{{ SHOP_NAME }}｜員工打卡</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root{--bg:#0b0c10;--text:#f5f5f7;--muted:#b7bbc3;--border:rgba(255,255,255,.08);--radius:18px}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+      background:radial-gradient(1200px 800px at 50% -20%, rgba(255,215,0,.12), transparent 50%),
+                 radial-gradient(900px 600px at 0% 0%, rgba(59,130,246,.12), transparent 55%),
+                 var(--bg);color:var(--text)}
+    .wrap{max-width:520px;margin:0 auto;padding:20px 16px 28px}
+    .brand{font-weight:800;letter-spacing:.5px;font-size:14px;color:rgba(255,215,0,.9)}
+    .title{margin:6px 0 12px;font-size:26px;font-weight:900}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:0 16px 42px rgba(0,0,0,.35)}
+    .row{display:flex;gap:12px;align-items:center;justify-content:space-between}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;border:1px solid var(--border);
+      background:rgba(0,0,0,.25);color:var(--muted);font-size:13px}
+    .clock{font-size:44px;font-weight:900;letter-spacing:1px;margin:10px 0 8px}
+    .sub{color:var(--muted);font-size:13px;line-height:1.4}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+    button{width:100%;border:none;border-radius:16px;padding:14px 14px;font-size:18px;font-weight:900;color:var(--text);
+      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));border:1px solid var(--border);cursor:pointer}
+    button:active{transform:scale(.99)}
+    .status{margin-top:12px;padding:12px 12px;border-radius:14px;border:1px solid var(--border);background:rgba(0,0,0,.22);font-size:14px;line-height:1.4;color:var(--muted)}
+    .status.ok{border-color:rgba(34,197,94,.35);color:rgba(220,252,231,.95)}
+    .status.bad{border-color:rgba(239,68,68,.38);color:rgba(254,226,226,.95)}
+    .status.warn{border-color:rgba(245,158,11,.35);color:rgba(255,237,213,.95)}
+    .kv{display:grid;grid-template-columns:92px 1fr;gap:8px;margin-top:8px}
+    .kv div{font-size:13px;color:var(--muted)}
+    .kv b{color:var(--text);font-weight:800}
+    .mini{margin-top:12px;color:rgba(255,255,255,.55);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">員工專用</div>
+    <div class="title">{{ SHOP_NAME }}｜打卡</div>
+
+    <div class="card">
+      <div class="row">
+        <div class="pill" id="pillLogin">尚未登入</div>
+        <div class="pill" id="pillGps">定位未取得</div>
+      </div>
+
+      <div class="clock" id="clock">--:--</div>
+      <div class="sub" id="hello">請稍候…</div>
+
+      <div class="kv">
+        <div>距離店面</div><div><b id="distText">--</b></div>
+        <div>圍欄規則</div><div><b id="fenceText">{{ GEOFENCE_METERS }}m 內可打卡</b></div>
+      </div>
+
+      <div class="grid">
+        <button id="btnIn">上班打卡</button>
+        <button id="btnOut">下班打卡</button>
+      </div>
+
+      <div class="status" id="statusBox">準備中…</div>
+      <div class="mini">若定位失敗：請到手機「設定 → 隱私權 → 定位服務」允許 LINE 使用定位。</div>
+    </div>
+  </div>
+
+<script>
+  const LIFF_ID = {{ (LIFF_ID or "")|tojson }};
+  const el = (id)=>document.getElementById(id);
+  const pillLogin = el('pillLogin');
+  const pillGps = el('pillGps');
+  const helloEl = el('hello');
+  const statusBox = el('statusBox');
+  const distText = el('distText');
+  const clockEl = el('clock');
+
+  let profile = null;
+  let lastPos = null;
+
+  function setStatus(type, text){
+    statusBox.className = 'status ' + (type || '');
+    statusBox.textContent = text;
+  }
+
+  function tickClock(){
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    clockEl.textContent = `${hh}:${mm}`;
+  }
+  setInterval(tickClock, 1000); tickClock();
+
+  async function init(){
+    if(!LIFF_ID){
+      setStatus('bad', '系統尚未設定 LIFF_ID（請在 Render 環境變數設定）。');
+      return;
+    }
+    try{
+      await liff.init({ liffId: LIFF_ID });
+
+      if(!liff.isLoggedIn()){
+        pillLogin.textContent = '未登入';
+        setStatus('warn', '請先登入 LINE 才能打卡。');
+        liff.login();
+        return;
+      }
+
+      profile = await liff.getProfile();
+      pillLogin.textContent = '已登入';
+      helloEl.textContent = `嗨 ${profile.displayName}，請先取得定位後再打卡。`;
+      setStatus('', '正在取得定位…');
+      await getGps();
+    }catch(err){
+      setStatus('bad', '初始化失敗：' + (err && err.message ? err.message : err));
+    }
+  }
+
+  function getGps(){
+    return new Promise((resolve,reject)=>{
+      if(!navigator.geolocation){
+        pillGps.textContent = '不支援定位';
+        setStatus('bad','此裝置不支援定位，無法打卡。');
+        return reject(new Error('no geolocation'));
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>{
+          lastPos = pos;
+          pillGps.textContent = '定位已取得';
+          distText.textContent = '已取得（由後端判斷 50m）';
+          setStatus('ok', '定位成功，可以打卡。');
+          resolve(pos);
+        },
+        ()=>{
+          pillGps.textContent = '定位失敗';
+          distText.textContent = '--';
+          setStatus('bad', '定位失敗：請允許定位權限後再試一次。');
+          reject(new Error('gps fail'));
+        },
+        { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+      );
+    });
+  }
+
+  async function postClock(action){
+    try{
+      if(!profile) throw new Error('尚未登入');
+      if(!lastPos) await getGps();
+
+      setStatus('', '送出打卡中…');
+
+      const payload = {
+        action,
+        userId: profile.userId,
+        lat: lastPos.coords.latitude,
+        lng: lastPos.coords.longitude,
+        device: navigator.userAgent || '',
+        note: ''
+      };
+
+      const resp = await fetch('/api/clock', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await resp.json();
+
+      if(data.ok){
+        setStatus('ok', `✅ 打卡成功｜距離 ${data.distance_m}m`);
+      }else{
+        setStatus('bad', data.message || '打卡失敗');
+      }
+    }catch(err){
+      setStatus('bad', '送出失敗：' + (err && err.message ? err.message : err));
+    }
+  }
+
+  el('btnIn').addEventListener('click', ()=>postClock('IN'));
+  el('btnOut').addEventListener('click', ()=>postClock('OUT'));
+
+  init();
+</script>
+</body>
+</html>
